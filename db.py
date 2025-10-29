@@ -15,7 +15,7 @@ def init_db_pool():
             pool_name="mypool",
             pool_size=int(os.getenv("DB_POOL_SIZE", "5")),
             host=os.getenv("DB_HOST", "127.0.0.1"),
-            port=int(os.getenv("DB_PORT", "3306")),
+            port=int(os.getenv("DB_PORT", "21012")),
             user=os.getenv("DB_USER", "root"),
             password=os.getenv("DB_PASSWORD", ""),
             database=os.getenv("DB_NAME", "country_cache"),
