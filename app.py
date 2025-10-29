@@ -1,6 +1,7 @@
 
 # app.py
 import os
+import psycopg2.extras
 import json
 from flask import Flask, request, jsonify, send_file
 from db import init_db_pool, get_conn
@@ -219,7 +220,8 @@ def list_countries():
 def get_country(name):
     conn = get_conn()
     try:
-        cur = conn.cursor(dictionary=True)
+        #cur = conn.cursor(dictionary=True)
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("SELECT id, name, capital, region, population, currency_code, exchange_rate, estimated_gdp, flag_url, last_refreshed_at FROM countries WHERE name_normalized = %s", (name.lower(),))
         row = cur.fetchone()
         cur.close()
