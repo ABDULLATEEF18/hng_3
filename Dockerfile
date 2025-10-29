@@ -5,11 +5,12 @@ FROM python:3.10-slim
 # Set working directory inside the container
 WORKDIR /app
 
+RUN pip install -r requirements.txt
 # Copy all project files into the container
 COPY . .
 
 # Install dependencies
-pip install -r requirements.txt
+
 
 # Expose the port your app will run on
 EXPOSE 8080
