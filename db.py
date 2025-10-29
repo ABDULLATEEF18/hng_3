@@ -13,7 +13,7 @@ def init_db_pool():
     result = urlparse(DB_URL)
 
     return pool.SimpleConnectionPool(
-        1, 10,
+        1, 20,
         user=result.username,
         password=result.password,
         host=result.hostname,
@@ -27,4 +27,5 @@ def get_conn():
     return DB_POOL.getconn()
 
 def release_conn(conn):
-    DB_POOL.putconn(conn)
+    if conn:
+        DB_POOL.putconn(conn)

@@ -1,8 +1,9 @@
 
 import os
+import traceback
 import psycopg2.extras
 from flask import Flask, request, jsonify, send_file
-from db import init_db_pool, get_conn
+from db import init_db_pool, get_conn, release_conn
 from utils import (
     fetch_countries,
     fetch_exchange_rates,
@@ -171,9 +172,13 @@ def refresh_countries():
 
     except Exception as e:
         conn.rollback()
+        print("❌ ERROR in /countries/refresh:", str(e))
+        traceback.print_exc()
         return jsonify({"error": "Internal server error", "details": str(e)}), 500
+
     finally:
-        conn.close()
+        release_conn(conn)
+       # conn.close()
 
 
 # GET /countries
@@ -214,7 +219,8 @@ def list_countries():
                 r["last_refreshed_at"] = r["last_refreshed_at"].replace(microsecond=0).isoformat()
         return jsonify(rows)
     finally:
-        conn.close()
+        release_conn(conn)
+        #conn.close()
 
 
 # GET /countries/:name
@@ -233,7 +239,8 @@ def get_country(name):
             row["last_refreshed_at"] = row["last_refreshed_at"].replace(microsecond=0).isoformat()
         return jsonify(row)
     finally:
-        conn.close()
+        release_conn(conn)
+        #conn.close()
 
 
 # DELETE /countries/:name
@@ -250,7 +257,8 @@ def delete_country(name):
             return jsonify({"error": "Country not found"}), 404
         return jsonify({"message": "Country deleted"}), 200
     finally:
-        conn.close()
+        release_conn(conn)
+        #conn.close()
 
 
 # GET /status
@@ -264,7 +272,8 @@ def status():
         last_refreshed_at = lr["value_text"] if lr and lr["value_text"] else None
         return jsonify({"total_countries": total_countries, "last_refreshed_at": last_refreshed_at})
     finally:
-        conn.close()
+        release_conn(conn)
+        #conn.close()
 
 
 # GET /countries/image
