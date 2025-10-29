@@ -1,11 +1,14 @@
 
-# app.py
 import os
 import psycopg2.extras
-import json
 from flask import Flask, request, jsonify, send_file
 from db import init_db_pool, get_conn
-from utils import fetch_countries, fetch_exchange_rates, compute_estimated_gdp, now_iso, generate_summary_image
+from utils import (
+    fetch_countries,
+    fetch_exchange_rates,
+    compute_estimated_gdp,
+    generate_summary_image,
+)
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
@@ -13,80 +16,89 @@ load_dotenv()
 app = Flask(__name__)
 app.config["JSON_SORT_KEYS"] = False
 
-# initialize DB pool
+# Initialize DB pool
 init_db_pool()
 
-# Helpers
+# -------------------------------
+# Helper Functions
+# -------------------------------
 def db_execute(conn, query, params=None, fetchone=False, fetchall=False):
-    #cur = conn.cursor(dictionary=True)
+    """Helper to run queries with optional fetch."""
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(query, params or ())
+    result = None
     if fetchone:
-        row = cur.fetchone()
-        cur.close()
-        return row
-    if fetchall:
-        rows = cur.fetchall()
-        cur.close()
-        return rows
+        result = cur.fetchone()
+    elif fetchall:
+        result = cur.fetchall()
     cur.close()
-    return None
+    return result
+
 
 def upsert_country(conn, country_obj):
     """
-    country_obj keys:
-     name, capital, region, population, currency_code, exchange_rate, estimated_gdp, flag_url, last_refreshed_at
-    Upsert by name_normalized (lowercase); update all fields.
+    Insert or update a country by name_normalized (PostgreSQL version).
     """
     sql = """
     INSERT INTO countries
     (name, name_normalized, capital, region, population, currency_code, exchange_rate, estimated_gdp, flag_url, last_refreshed_at)
     VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-    ON DUPLICATE KEY UPDATE
-      name = VALUES(name),
-      capital = VALUES(capital),
-      region = VALUES(region),
-      population = VALUES(population),
-      currency_code = VALUES(currency_code),
-      exchange_rate = VALUES(exchange_rate),
-      estimated_gdp = VALUES(estimated_gdp),
-      flag_url = VALUES(flag_url),
-      last_refreshed_at = VALUES(last_refreshed_at)
+    ON CONFLICT (name_normalized)
+    DO UPDATE SET
+      name = EXCLUDED.name,
+      capital = EXCLUDED.capital,
+      region = EXCLUDED.region,
+      population = EXCLUDED.population,
+      currency_code = EXCLUDED.currency_code,
+      exchange_rate = EXCLUDED.exchange_rate,
+      estimated_gdp = EXCLUDED.estimated_gdp,
+      flag_url = EXCLUDED.flag_url,
+      last_refreshed_at = EXCLUDED.last_refreshed_at;
     """
-    cur = conn.cursor()
-    cur.execute(sql, (
-        country_obj["name"],
-        country_obj["name"].lower(),
-        country_obj.get("capital"),
-        country_obj.get("region"),
-        country_obj["population"],
-        country_obj.get("currency_code"),
-        country_obj.get("exchange_rate"),
-        country_obj.get("estimated_gdp"),
-        country_obj.get("flag_url"),
-        country_obj.get("last_refreshed_at")
-    ))
-    cur.close()
+    with conn.cursor() as cur:
+        cur.execute(sql, (
+            country_obj["name"],
+            country_obj["name"].lower(),
+            country_obj.get("capital"),
+            country_obj.get("region"),
+            country_obj["population"],
+            country_obj.get("currency_code"),
+            country_obj.get("exchange_rate"),
+            country_obj.get("estimated_gdp"),
+            country_obj.get("flag_url"),
+            country_obj.get("last_refreshed_at"),
+        ))
+
+
+# -------------------------------
+# Routes
+# -------------------------------
 
 # POST /countries/refresh
 @app.route("/countries/refresh", methods=["POST"])
 def refresh_countries():
     conn = get_conn()
     try:
-        # fetch external data
+        # fetch data
         try:
             countries = fetch_countries()
-        except Exception as e:
-            return jsonify({"error": "External data source unavailable", "details": "Could not fetch data from REST Countries"}), 503
+        except Exception:
+            return jsonify({
+                "error": "External data source unavailable",
+                "details": "Could not fetch data from REST Countries"
+            }), 503
 
         try:
             exchange_rates = fetch_exchange_rates()
-        except Exception as e:
-            return jsonify({"error": "External data source unavailable", "details": "Could not fetch data from Exchange Rates"}), 503
+        except Exception:
+            return jsonify({
+                "error": "External data source unavailable",
+                "details": "Could not fetch data from Exchange Rates"
+            }), 503
 
-        # Use a transaction: do not modify DB if anything crashes
-        conn.start_transaction()
-        # track last refreshed
+        # Start transaction
+        conn.autocommit = False
+        cur = conn.cursor()
         last_refreshed_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         total = 0
 
@@ -100,37 +112,19 @@ def refresh_countries():
             flag_url = c.get("flag")
             currencies = c.get("currencies") or []
 
-            # default fields
             currency_code = None
             exchange_rate = None
             estimated_gdp = 0
 
             if currencies:
-                # currencies is e.g. [{"code":"NGN","name":"Nigerian naira",...}, ...]
                 first = currencies[0]
                 currency_code = first.get("code")
                 if currency_code:
-                    rate = exchange_rates.get(currency_code)
-                    # exchange_rates keys might be strings; also sometimes rates are under different naming
-                    if rate is None:
-                        # try uppercase/lowercase
-                        rate = exchange_rates.get(currency_code.upper()) or exchange_rates.get(currency_code.lower())
-                    if rate is not None:
+                    rate = exchange_rates.get(currency_code) or exchange_rates.get(currency_code.upper()) or exchange_rates.get(currency_code.lower())
+                    if rate:
                         exchange_rate = float(rate)
                         estimated_gdp = compute_estimated_gdp(population, exchange_rate)
-                    else:
-                        exchange_rate = None
-                        estimated_gdp = None
-                else:
-                    currency_code = None
-                    exchange_rate = None
-                    estimated_gdp = 0
-            else:
-                currency_code = None
-                exchange_rate = None
-                estimated_gdp = 0
 
-            # Upsert into DB
             country_obj = {
                 "name": name,
                 "capital": capital,
@@ -145,26 +139,35 @@ def refresh_countries():
             upsert_country(conn, country_obj)
             total += 1
 
-        # update meta table
-       # cur = conn.cursor()
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute("REPLACE INTO meta (key_name, value_text) VALUES (%s, %s)", ("last_refreshed_at", last_refreshed_at))
-        cur.execute("REPLACE INTO meta (key_name, value_text) VALUES (%s, %s)", ("total_countries", str(total)))
+        # Update meta table (Postgres-compatible)
+        cur.execute("""
+            INSERT INTO meta (key_name, value_text)
+            VALUES (%s, %s)
+            ON CONFLICT (key_name)
+            DO UPDATE SET value_text = EXCLUDED.value_text;
+        """, ("last_refreshed_at", last_refreshed_at))
+        cur.execute("""
+            INSERT INTO meta (key_name, value_text)
+            VALUES (%s, %s)
+            ON CONFLICT (key_name)
+            DO UPDATE SET value_text = EXCLUDED.value_text;
+        """, ("total_countries", str(total)))
         cur.close()
-
         conn.commit()
 
         # generate summary image
-        # Fetch top 5 by estimated_gdp (desc)
-        #cur = conn.cursor(dictionary=True)
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("SELECT name, estimated_gdp FROM countries WHERE estimated_gdp IS NOT NULL ORDER BY estimated_gdp DESC LIMIT 5")
         rows = cur.fetchall()
         top5 = [(r["name"], r["estimated_gdp"]) for r in rows]
         cur.close()
-        img_path = generate_summary_image(total, top5, last_refreshed_at, out_path="cache/summary.png")
+        generate_summary_image(total, top5, last_refreshed_at, out_path="cache/summary.png")
 
-        return jsonify({"message": "Refresh successful", "total_countries": total, "last_refreshed_at": last_refreshed_at}), 200
+        return jsonify({
+            "message": "Refresh successful",
+            "total_countries": total,
+            "last_refreshed_at": last_refreshed_at
+        }), 200
 
     except Exception as e:
         conn.rollback()
@@ -172,14 +175,15 @@ def refresh_countries():
     finally:
         conn.close()
 
-# GET /countries with filters and sorting
+
+# GET /countries
 @app.route("/countries", methods=["GET"])
 def list_countries():
     conn = get_conn()
     try:
         region = request.args.get("region")
         currency = request.args.get("currency")
-        sort = request.args.get("sort")  # example: gdp_desc
+        sort = request.args.get("sort")
 
         q = "SELECT id, name, capital, region, population, currency_code, exchange_rate, estimated_gdp, flag_url, last_refreshed_at FROM countries"
         conditions = []
@@ -191,7 +195,6 @@ def list_countries():
         if currency:
             conditions.append("currency_code = %s")
             params.append(currency)
-
         if conditions:
             q += " WHERE " + " AND ".join(conditions)
 
@@ -205,30 +208,25 @@ def list_countries():
             elif sort == "name_desc":
                 q += " ORDER BY name DESC"
 
-        #cur = conn.cursor(dictionary=True)
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute(q, params)
-        rows = cur.fetchall()
-        cur.close()
-
-        # convert dates to ISO
+        rows = db_execute(conn, q, params, fetchall=True)
         for r in rows:
-            if isinstance(r.get("last_refreshed_at"), (datetime, )):
+            if isinstance(r.get("last_refreshed_at"), datetime):
                 r["last_refreshed_at"] = r["last_refreshed_at"].replace(microsecond=0).isoformat()
         return jsonify(rows)
     finally:
         conn.close()
+
 
 # GET /countries/:name
 @app.route("/countries/<string:name>", methods=["GET"])
 def get_country(name):
     conn = get_conn()
     try:
-        #cur = conn.cursor(dictionary=True)
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute("SELECT id, name, capital, region, population, currency_code, exchange_rate, estimated_gdp, flag_url, last_refreshed_at FROM countries WHERE name_normalized = %s", (name.lower(),))
-        row = cur.fetchone()
-        cur.close()
+        row = db_execute(conn,
+            "SELECT id, name, capital, region, population, currency_code, exchange_rate, estimated_gdp, flag_url, last_refreshed_at FROM countries WHERE name_normalized=%s",
+            (name.lower(),),
+            fetchone=True
+        )
         if not row:
             return jsonify({"error": "Country not found"}), 404
         if isinstance(row.get("last_refreshed_at"), datetime):
@@ -236,6 +234,7 @@ def get_country(name):
         return jsonify(row)
     finally:
         conn.close()
+
 
 # DELETE /countries/:name
 @app.route("/countries/<string:name>", methods=["DELETE"])
@@ -253,23 +252,20 @@ def delete_country(name):
     finally:
         conn.close()
 
+
 # GET /status
 @app.route("/status", methods=["GET"])
 def status():
     conn = get_conn()
     try:
-        #cur = conn.cursor(dictionary=True)
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute("SELECT value_text FROM meta WHERE key_name=%s", ("total_countries",))
-        tot = cur.fetchone()
-        cur.execute("SELECT value_text FROM meta WHERE key_name=%s", ("last_refreshed_at",))
-        lr = cur.fetchone()
-        cur.close()
+        tot = db_execute(conn, "SELECT value_text FROM meta WHERE key_name=%s", ("total_countries",), fetchone=True)
+        lr = db_execute(conn, "SELECT value_text FROM meta WHERE key_name=%s", ("last_refreshed_at",), fetchone=True)
         total_countries = int(tot["value_text"]) if tot and tot["value_text"] else 0
         last_refreshed_at = lr["value_text"] if lr and lr["value_text"] else None
         return jsonify({"total_countries": total_countries, "last_refreshed_at": last_refreshed_at})
     finally:
         conn.close()
+
 
 # GET /countries/image
 @app.route("/countries/image", methods=["GET"])
@@ -279,5 +275,9 @@ def serve_image():
         return send_file(path, mimetype="image/png")
     return jsonify({"error": "Summary image not found"}), 404
 
+
+# -------------------------------
+# Run App
+# -------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
