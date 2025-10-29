@@ -18,7 +18,8 @@ init_db_pool()
 
 # Helpers
 def db_execute(conn, query, params=None, fetchone=False, fetchall=False):
-    cur = conn.cursor(dictionary=True)
+    #cur = conn.cursor(dictionary=True)
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(query, params or ())
     if fetchone:
         row = cur.fetchone()
@@ -145,7 +146,8 @@ def refresh_countries():
             total += 1
 
         # update meta table
-        cur = conn.cursor()
+       # cur = conn.cursor()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("REPLACE INTO meta (key_name, value_text) VALUES (%s, %s)", ("last_refreshed_at", last_refreshed_at))
         cur.execute("REPLACE INTO meta (key_name, value_text) VALUES (%s, %s)", ("total_countries", str(total)))
         cur.close()
@@ -154,7 +156,8 @@ def refresh_countries():
 
         # generate summary image
         # Fetch top 5 by estimated_gdp (desc)
-        cur = conn.cursor(dictionary=True)
+        #cur = conn.cursor(dictionary=True)
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("SELECT name, estimated_gdp FROM countries WHERE estimated_gdp IS NOT NULL ORDER BY estimated_gdp DESC LIMIT 5")
         rows = cur.fetchall()
         top5 = [(r["name"], r["estimated_gdp"]) for r in rows]
@@ -202,7 +205,8 @@ def list_countries():
             elif sort == "name_desc":
                 q += " ORDER BY name DESC"
 
-        cur = conn.cursor(dictionary=True)
+        #cur = conn.cursor(dictionary=True)
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(q, params)
         rows = cur.fetchall()
         cur.close()
@@ -254,7 +258,8 @@ def delete_country(name):
 def status():
     conn = get_conn()
     try:
-        cur = conn.cursor(dictionary=True)
+        #cur = conn.cursor(dictionary=True)
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("SELECT value_text FROM meta WHERE key_name=%s", ("total_countries",))
         tot = cur.fetchone()
         cur.execute("SELECT value_text FROM meta WHERE key_name=%s", ("last_refreshed_at",))
