@@ -1,0 +1,63 @@
+
+# ===========================
+# Python
+# ===========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+.venv/
+venv/
+env/
+ENV/
+
+# ===========================
+# Flask / Django / Config
+# ===========================
+instance/
+*.db
+*.sqlite3
+config.py
+settings.py
+
+# Environment variables and secrets
+.env
+.env.*
+*.secret
+*.key
+
+# ===========================
+# IDEs and Editors
+# ===========================
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ===========================
+# Logs and Reports
+# ===========================
+*.log
+*.out
+*.err
+logs/
+*.pid
+
+# ===========================
+# System / OS files
+# ===========================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===========================
+# Compiled files
+# ===========================
+*.so
+*.dll
+*.exe
+*.bak
+
+# ===========================
+#
