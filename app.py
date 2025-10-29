@@ -273,4 +273,4 @@ def serve_image():
     return jsonify({"error": "Summary image not found"}), 404
 
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
