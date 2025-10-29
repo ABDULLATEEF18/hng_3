@@ -21,3 +21,6 @@ def get_db_connection():
 
 def release_db_connection(conn):
     DB_POOL.putconn(conn)
+
+def get_conn():
+    return DB_POOL.get_connection()
