@@ -1,26 +1,30 @@
 # db.py
+import os
 import psycopg2
 from psycopg2 import pool
-import os
+from urllib.parse import urlparse
 
-DB_POOL = None
+DB_URL = os.getenv("DATABASE_URL")
 
 def init_db_pool():
-    global DB_POOL
-    DB_POOL = pool.SimpleConnectionPool(
+    if not DB_URL:
+        raise ValueError("DATABASE_URL not set in environment variables")
+
+    result = urlparse(DB_URL)
+
+    return pool.SimpleConnectionPool(
         1, 10,
-        host=os.getenv("DB_HOST"),
-        port=os.getenv("DB_PORT"),
-        database=os.getenv("DB_NAME"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD")
+        user=result.username,
+        password=result.password,
+        host=result.hostname,
+        port=result.port,
+        database=result.path[1:] 
     )
 
-def get_db_connection():
-    return DB_POOL.getconn()
-
-def release_db_connection(conn):
-    DB_POOL.putconn(conn)
+DB_POOL = init_db_pool()
 
 def get_conn():
-    return DB_POOL.get_connection()
+    return DB_POOL.getconn()
+
+def release_conn(conn):
+    DB_POOL.putconn(conn)
